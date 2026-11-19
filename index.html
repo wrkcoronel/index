@@ -28,12 +28,16 @@
   a:hover { text-decoration: underline; }
   a:visited { color: var(--dim); }
   .domain { color: var(--dim); font-size: 13px; margin-left: 6px; }
+  .mark { color: var(--dim); font-size: 13px; margin-left: 6px; cursor: help; }
 </style>
 </head>
 <body>
 <header>
   <b>index</b>
-  <button id="theme-button"></button>
+  <span>
+    <button id="random-button" title="open one of the least visited sites">random</button>
+    <button id="theme-button"></button>
+  </span>
 </header>
 <main id="list"></main>
 
@@ -94,6 +98,29 @@ function applyTheme(theme) {
   themeButton.textContent = "theme: " + theme;
 }
 
+const CLICKS_KEY = "clicks";
+const STALE_DAYS = 30;
+const TOP_SIZE = 5;
+const MIN_HISTORY = 5;
+
+function readClicks() {
+  try {
+    return JSON.parse(localStorage.getItem(CLICKS_KEY)) || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function addClick(siteUrl) {
+  try {
+    const clicks = readClicks();
+    const entry = clicks[siteUrl] || { count: 0, last: 0 };
+    clicks[siteUrl] = { count: entry.count + 1, last: Date.now() };
+    localStorage.setItem(CLICKS_KEY, JSON.stringify(clicks));
+  } catch (error) {
+  }
+}
+
 function groupLinksByCategory() {
   const linksByCategory = new Map();
   for (const [category, siteName, siteUrl] of links) {
@@ -105,34 +132,93 @@ function groupLinksByCategory() {
   return linksByCategory;
 }
 
+function createListItem(siteName, siteUrl, clicks, hasHistory) {
+  const listItem = document.createElement("li");
+
+  const siteLink = document.createElement("a");
+  siteLink.href = siteUrl;
+  siteLink.textContent = siteName;
+  siteLink.target = "_blank";
+  siteLink.rel = "noopener noreferrer";
+  siteLink.addEventListener("click", () => addClick(siteUrl));
+  siteLink.addEventListener("auxclick", () => addClick(siteUrl));
+
+  const siteDomain = document.createElement("span");
+  siteDomain.className = "domain";
+  siteDomain.textContent = new URL(siteUrl).hostname.replace(/^www\./, "");
+
+  listItem.append(siteLink, siteDomain);
+
+  const entry = clicks[siteUrl];
+  const staleLimit = Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000;
+  if (hasHistory && (!entry || entry.last < staleLimit)) {
+    const mark = document.createElement("span");
+    mark.className = "mark";
+    mark.textContent = "\u21bb";
+    mark.title = "not opened in " + STALE_DAYS + "+ days";
+    listItem.append(mark);
+  }
+
+  return listItem;
+}
+
+function renderMostUsed(listContainer, clicks, hasHistory) {
+  const top = links
+    .filter(([, , siteUrl]) => clicks[siteUrl] && clicks[siteUrl].count > 0)
+    .sort((a, b) => clicks[b[2]].count - clicks[a[2]].count)
+    .slice(0, TOP_SIZE);
+
+  if (top.length === 0) return;
+
+  const title = document.createElement("h2");
+  title.textContent = "most used";
+  const siteList = document.createElement("ul");
+
+  for (const [, siteName, siteUrl] of top) {
+    const item = createListItem(siteName, siteUrl, clicks, false);
+    const count = document.createElement("span");
+    count.className = "domain";
+    count.textContent = clicks[siteUrl].count + "x";
+    item.append(count);
+    siteList.append(item);
+  }
+
+  listContainer.append(title, siteList);
+}
+
 function renderList() {
   const listContainer = document.getElementById("list");
+  const clicks = readClicks();
+  const totalClicks = Object.values(clicks).reduce((sum, e) => sum + e.count, 0);
+  const hasHistory = totalClicks >= MIN_HISTORY;
+
+  renderMostUsed(listContainer, clicks, hasHistory);
 
   for (const [category, sites] of groupLinksByCategory()) {
     const categoryTitle = document.createElement("h2");
     categoryTitle.textContent = category;
 
     const siteList = document.createElement("ul");
-
     for (const [siteName, siteUrl] of sites) {
-      const listItem = document.createElement("li");
-
-      const siteLink = document.createElement("a");
-      siteLink.href = siteUrl;
-      siteLink.textContent = siteName;
-      siteLink.target = "_blank";
-      siteLink.rel = "noopener noreferrer";
-
-      const siteDomain = document.createElement("span");
-      siteDomain.className = "domain";
-      siteDomain.textContent = new URL(siteUrl).hostname.replace(/^www\./, "");
-
-      listItem.append(siteLink, siteDomain);
-      siteList.append(listItem);
+      siteList.append(createListItem(siteName, siteUrl, clicks, hasHistory));
     }
 
     listContainer.append(categoryTitle, siteList);
   }
+}
+
+function openRandomSite() {
+  const clicks = readClicks();
+  const countOf = (siteUrl) => (clicks[siteUrl] ? clicks[siteUrl].count : 0);
+
+  const candidates = links
+    .map(([, , siteUrl]) => [siteUrl, Math.random()])
+    .sort((a, b) => countOf(a[0]) - countOf(b[0]) || a[1] - b[1])
+    .slice(0, Math.max(1, Math.ceil(links.length / 3)));
+
+  const [siteUrl] = candidates[Math.floor(Math.random() * candidates.length)];
+  addClick(siteUrl);
+  window.open(siteUrl, "_blank", "noopener,noreferrer");
 }
 
 themeButton.onclick = () => {
@@ -141,6 +227,8 @@ themeButton.onclick = () => {
   applyTheme(nextTheme);
   saveTheme(nextTheme);
 };
+
+document.getElementById("random-button").onclick = openRandomSite;
 
 applyTheme(readSavedTheme());
 renderList();
